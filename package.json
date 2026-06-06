@@ -1,32 +1,26 @@
 {
-  "name": "DinosaurSprites",
-  "version": "0.0.0-44",
+  "name": "DOMChicken",
+  "version": "0.0.1",
   "description": "",
-  "main": "/game/app.js",
+  "main": "/scripts/build-bookmarklet.js",
   "scripts": {
-    "test": "node /tests/util.js",
     "start": "node ./game/app.js",
-    "build:bookmarklet": "node scripts/build-bookmarklet.js"
+    "build": "node scripts/build-bookmarklet.js",
+    "deploy": "npm run build && gh-pages -d dist"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/svnh/Dinosaurio.git"
+    "url": "https://github.com/lazd/Dinosaurio.git"
   },
-  "author": "Savannah Kunovsky",
+  "author": "Larry Davis <lazdnet@gmail.com>",
   "license": "BSD",
   "bugs": {
-    "url": "https://github.com/svnh/Dinosaurio/issues"
+    "url": "https://github.com/lazd/Dinosaurio/issues"
   },
-  "dependencies": {
-    "express": ">=3.11.0",
-    "socket.io": "~0.9.16"
-  },
-  "subdomain": "dinosaurio",
   "engines": {
     "node": "0.8.x"
   },
   "devDependencies": {
-    "chai": "~1.7.2",
-    "mocha": "~1.12.0"
+    "gh-pages": "^6.3.0"
   }
 }

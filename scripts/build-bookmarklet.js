@@ -6,9 +6,10 @@ var path = require('path');
 var ROOT = path.join(__dirname, '..');
 var WIDGET = path.join(ROOT, 'game/public/src/chicken-widget.js');
 var SPRITE = path.join(ROOT, 'game/public/sprites/chicken/chicken-sprite.png');
-var OUT_HTML = path.join(ROOT, 'game/public/chicken-bookmarklet.html');
-var OUT_TXT = path.join(ROOT, 'game/public/chicken-bookmarklet.txt');
-var OUT_JS = path.join(ROOT, 'game/public/chicken-bookmarklet.js');
+var OUT_DIR = path.join(ROOT, 'dist');
+var OUT_HTML = path.join(OUT_DIR, 'index.html');
+var OUT_TXT = path.join(OUT_DIR, 'bookmarklet.txt');
+var OUT_JS = path.join(OUT_DIR, 'bookmarklet.js');
 
 function minify(code) {
   return code
@@ -60,7 +61,7 @@ function buildHtml(bookmarklet) {
     '    <h2>Setup</h2>\n' +
     '    <ol>\n' +
     '      <li>Run <code>npm run build:bookmarklet</code> after changing the widget or sprite.</li>\n' +
-    '      <li>Open this file locally or host it anywhere.</li>\n' +
+    '      <li>Run <code>npm run deploy:bookmarklet</code> to publish to GitHub Pages.</li>\n' +
     '      <li>Drag the bookmark link above into your bookmarks bar.</li>\n' +
     '    </ol>\n' +
     '    <h2>Bookmarklet URL</h2>\n' +
@@ -83,6 +84,7 @@ function main() {
   var minified = minify(inject);
   var bookmarklet = buildBookmarklet(spriteDataUrl);
 
+  fs.mkdirSync(OUT_DIR, { recursive: true });
   fs.writeFileSync(OUT_JS, minified + '\n');
   fs.writeFileSync(OUT_TXT, bookmarklet + '\n');
   fs.writeFileSync(OUT_HTML, buildHtml(bookmarklet));
