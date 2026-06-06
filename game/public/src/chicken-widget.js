@@ -17,11 +17,12 @@ var DinoChicken = (function () {
       return Math.PI * 2 / (8 / direction) - Math.PI / 2;
     },
     isOutOfBounds: function (size, left, top, maxX, maxY) {
-      if (left <= 0) return [true, 0, top];
-      if (top <= 0) return [true, left, 0];
-      if (left + size >= maxX) return [true, maxX - size, top];
-      if (top + size >= maxY) return [true, left, maxY - size];
-      return [false, left, top];
+      var minCoord = -size / 2;
+      var maxLeft = maxX - size / 2;
+      var maxTop = maxY - size / 2;
+      var boundedLeft = Math.max(minCoord, Math.min(maxLeft, left));
+      var boundedTop = Math.max(minCoord, Math.min(maxTop, top));
+      return [boundedLeft !== left || boundedTop !== top, boundedLeft, boundedTop];
     }
   };
 
@@ -191,12 +192,14 @@ var DinoChicken = (function () {
       }
       .dino-chicken-root .dino-chicken-hint {
         position: fixed;
-        top: 16px;
-        left: 16px;
+        bottom: 16px;
+        left: 50%;
+        transform: translate(-50%, 0);
         padding: 12px 16px;
         color: #fff;
+        background: rgba(0, 0, 0, 0.25);
         font: 14px/1.5 Helvetica Neue, sans-serif;
-        border-radius: 6px;
+        border-radius: 14px;
         pointer-events: auto;
         z-index: 1;
         text-shadow: 0 1px 2px rgba(0, 0, 0, .8);
@@ -213,17 +216,24 @@ var DinoChicken = (function () {
         background-repeat: no-repeat;
         image-rendering: pixelated;
         image-rendering: crisp-edges;
+        z-index: 3;
       }
       .dino-chicken-root .dino-chicken-peck-dot {
         position: fixed;
-        width: 4px;
-        height: 4px;
-        border-radius: 50%;
-        background: #e33;
         transform: translate(-50%, -50%);
         display: none;
         pointer-events: none;
         z-index: 2;
+      }
+      .dino-chicken-peck-dot:after {
+        font-size: 20px;
+        content: '⊹';
+        color: red;
+        line-height: 0;
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
       }
     `;
   }
