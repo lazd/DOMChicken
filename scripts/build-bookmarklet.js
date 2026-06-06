@@ -4,7 +4,7 @@ var fs = require('fs');
 var path = require('path');
 
 var ROOT = path.join(__dirname, '..');
-var SOURCE = path.join(__dirname, 'chicken-inject.source.js');
+var WIDGET = path.join(ROOT, 'game/public/src/chicken-widget.js');
 var OUT_JS = path.join(ROOT, 'game/public/chicken-bookmarklet.js');
 var OUT_HTML = path.join(ROOT, 'game/public/chicken-bookmarklet.html');
 
@@ -35,9 +35,15 @@ function minify(code) {
 }
 
 function buildInjectScript(spriteUrl) {
-  var source = fs.readFileSync(SOURCE, 'utf8');
-  var inject = source.replace('__SPRITE_URL__', JSON.stringify(spriteUrl));
-  return inject;
+  var widget = fs.readFileSync(WIDGET, 'utf8');
+  var bootstrap =
+    '(function(u){' +
+    'if(window.__dinoChicken){window.__dinoChicken.destroy();return;}' +
+    widget +
+    'window.__dinoChicken=DinoChicken.mount({mode:"inject",spriteUrl:u});' +
+    '})(' + JSON.stringify(spriteUrl) + ');';
+
+  return bootstrap;
 }
 
 function buildLoaderBookmarklet(scriptUrl) {
@@ -80,6 +86,7 @@ function buildHtml(baseUrl, loaderBookmarklet, scriptUrl, spriteUrl) {
     '    </ol>\n' +
     '    <h2>Assets</h2>\n' +
     '    <ul>\n' +
+    '      <li>Widget: <code>' + baseUrl + '/src/chicken-widget.js</code></li>\n' +
     '      <li>Script: <code>' + scriptUrl + '</code></li>\n' +
     '      <li>Sprite: <code>' + spriteUrl + '</code></li>\n' +
     '    </ul>\n' +
