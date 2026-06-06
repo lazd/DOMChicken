@@ -97,9 +97,19 @@ var DinoChicken = (function () {
     var frames = this.animations[this.currentAnim];
     if (!frames || frames.length <= 1) return;
     if (time - this.lastFrameTime >= 1000 / FRAME_RATE) {
+      var prevFrame = this.frameIndex;
       this.frameIndex = (this.frameIndex + 1) % frames.length;
       this.el.style.backgroundPosition = (-frames[this.frameIndex]) + 'px 0';
       this.lastFrameTime = time;
+
+      if (
+        this.currentAnim.indexOf('picking_') === 0 &&
+        this.frameIndex === 4 &&
+        prevFrame !== 4 &&
+        this.onPeck
+      ) {
+        this.onPeck();
+      }
     }
   };
 
@@ -145,12 +155,12 @@ var DinoChicken = (function () {
         top: 16px;
         left: 16px;
         padding: 12px 16px;
-        background: rgba(0, 0, 0, .55);
         color: #fff;
         font: 14px/1.5 Helvetica Neue, sans-serif;
         border-radius: 6px;
         pointer-events: auto;
         z-index: 1;
+        text-shadow: 0 1px 2px rgba(0, 0, 0, .8);
       }
       .dino-chicken-root .dino-chicken-stage {
         position: absolute;
@@ -211,6 +221,26 @@ var DinoChicken = (function () {
 
     var keys = { up: false, down: false, left: false, right: false };
     var rafId = 0;
+    var hiddenElements = [];
+
+    function hideElementUnderChicken() {
+      var rect = dom.sprite.getBoundingClientRect();
+      var x = rect.left + rect.width / 2;
+      var y = rect.top + rect.height * 0.75;
+      var elements = document.elementsFromPoint(x, y);
+
+      for (var i = 0; i < elements.length; i++) {
+        var el = elements[i];
+        if (dom.root.contains(el)) continue;
+        if (el === document.documentElement || el === document.body) continue;
+
+        hiddenElements.push({ el: el, visibility: el.style.visibility });
+        el.style.visibility = 'hidden';
+        break;
+      }
+    }
+
+    chicken.onPeck = hideElementUnderChicken;
 
     function getDirFromKeys() {
       var up = keys.up && !keys.down;
@@ -274,6 +304,11 @@ var DinoChicken = (function () {
       document.removeEventListener('keydown', onKeyDown, true);
       document.removeEventListener('keyup', onKeyUp, true);
       window.removeEventListener('resize', onResize);
+
+      for (var i = 0; i < hiddenElements.length; i++) {
+        hiddenElements[i].el.style.visibility = hiddenElements[i].visibility;
+      }
+
       if (style.parentNode) style.parentNode.removeChild(style);
       if (dom.root.parentNode) dom.root.parentNode.removeChild(dom.root);
       if (typeof window !== 'undefined' && window.__dinoChicken) {

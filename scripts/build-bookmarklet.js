@@ -5,26 +5,10 @@ var path = require('path');
 
 var ROOT = path.join(__dirname, '..');
 var WIDGET = path.join(ROOT, 'game/public/src/chicken-widget.js');
-var OUT_JS = path.join(ROOT, 'game/public/chicken-bookmarklet.js');
+var SPRITE = path.join(ROOT, 'game/public/sprites/chicken/chicken-sprite.png');
 var OUT_HTML = path.join(ROOT, 'game/public/chicken-bookmarklet.html');
-
-function parseArgs(argv) {
-  var baseUrl = 'http://localhost:3000';
-
-  for (var i = 2; i < argv.length; i++) {
-    if (argv[i] === '--base-url' && argv[i + 1]) {
-      baseUrl = argv[++i].replace(/\/$/, '');
-    } else if (argv[i] === '--help' || argv[i] === '-h') {
-      console.log(
-        'Usage: node scripts/build-bookmarklet.js [--base-url URL]\n\n' +
-        '  --base-url   Origin where game/public is hosted (default: http://localhost:3000)'
-      );
-      process.exit(0);
-    }
-  }
-
-  return { baseUrl: baseUrl };
-}
+var OUT_TXT = path.join(ROOT, 'game/public/chicken-bookmarklet.txt');
+var OUT_JS = path.join(ROOT, 'game/public/chicken-bookmarklet.js');
 
 function minify(code) {
   return code
@@ -34,30 +18,25 @@ function minify(code) {
     .trim();
 }
 
-function buildInjectScript(spriteUrl) {
+function buildInjectScript(spriteDataUrl) {
   var widget = fs.readFileSync(WIDGET, 'utf8');
-  var bootstrap =
-    '(function(u){' +
+  return (
+    '(function(){' +
     'if(window.__dinoChicken){window.__dinoChicken.destroy();return;}' +
     widget +
-    'window.__dinoChicken=DinoChicken.mount({mode:"inject",spriteUrl:u});' +
-    '})(' + JSON.stringify(spriteUrl) + ');';
-
-  return bootstrap;
-}
-
-function buildLoaderBookmarklet(scriptUrl) {
-  return (
-    'javascript:void(function(u){' +
-    'if(window.__dinoChicken){window.__dinoChicken.destroy();return;}' +
-    'var s=document.createElement(\'script\');' +
-    's.src=u+\'?\'+Date.now();' +
-    'document.body.appendChild(s);' +
-    '})(' + JSON.stringify(scriptUrl) + ')'
+    'window.__dinoChicken=DinoChicken.mount({' +
+    'mode:"inject",' +
+    'spriteUrl:' + JSON.stringify(spriteDataUrl) +
+    '});' +
+    '})();'
   );
 }
 
-function buildHtml(baseUrl, loaderBookmarklet, scriptUrl, spriteUrl) {
+function buildBookmarklet(spriteDataUrl) {
+  return 'javascript:' + minify(buildInjectScript(spriteDataUrl));
+}
+
+function buildHtml(bookmarklet) {
   return '<!doctype html>\n' +
     '<html>\n' +
     '  <head>\n' +
@@ -76,41 +55,42 @@ function buildHtml(baseUrl, loaderBookmarklet, scriptUrl, spriteUrl) {
     '  <body>\n' +
     '    <h1>Chicken Bookmarklet</h1>\n' +
     '    <p>Drag this link to your bookmarks bar, then click it on any page to inject the chicken.</p>\n' +
-    '    <p><a class="bookmarklet" href="' + loaderBookmarklet + '">🐔 Chicken</a></p>\n' +
-    '    <p>Click the bookmark again on the same page to remove the chicken.</p>\n' +
+    '    <p><a class="bookmarklet" id="bookmarklet" href="#">🐔 Chicken</a></p>\n' +
+    '    <p>Click the bookmark again on the same page to remove the chicken. No server required.</p>\n' +
     '    <h2>Setup</h2>\n' +
     '    <ol>\n' +
-    '      <li>Host <code>game/public</code> (e.g. <code>npm start</code> or any static server).</li>\n' +
-    '      <li>Rebuild with your host URL: <code>node scripts/build-bookmarklet.js --base-url ' + baseUrl + '</code></li>\n' +
+    '      <li>Run <code>npm run build:bookmarklet</code> after changing the widget or sprite.</li>\n' +
+    '      <li>Open this file locally or host it anywhere.</li>\n' +
     '      <li>Drag the bookmark link above into your bookmarks bar.</li>\n' +
     '    </ol>\n' +
-    '    <h2>Assets</h2>\n' +
-    '    <ul>\n' +
-    '      <li>Widget: <code>' + baseUrl + '/src/chicken-widget.js</code></li>\n' +
-    '      <li>Script: <code>' + scriptUrl + '</code></li>\n' +
-    '      <li>Sprite: <code>' + spriteUrl + '</code></li>\n' +
-    '    </ul>\n' +
     '    <h2>Bookmarklet URL</h2>\n' +
-    '    <textarea readonly>' + loaderBookmarklet + '</textarea>\n' +
+    '    <textarea id="bookmarklet-url" readonly></textarea>\n' +
+    '    <script>\n' +
+    '      var bookmarklet = ' + JSON.stringify(bookmarklet) + ';\n' +
+    '      document.getElementById("bookmarklet").href = bookmarklet;\n' +
+    '      document.getElementById("bookmarklet-url").value = bookmarklet;\n' +
+    '    </script>\n' +
     '  </body>\n' +
     '</html>\n';
 }
 
 function main() {
-  var opts = parseArgs(process.argv);
-  var scriptUrl = opts.baseUrl + '/chicken-bookmarklet.js';
-  var spriteUrl = opts.baseUrl + '/sprites/chicken/chicken-sprite.png';
-  var inject = buildInjectScript(spriteUrl);
+  var spriteDataUrl =
+    'data:image/png;base64,' +
+    fs.readFileSync(SPRITE).toString('base64');
+
+  var inject = buildInjectScript(spriteDataUrl);
   var minified = minify(inject);
-  var loaderBookmarklet = buildLoaderBookmarklet(scriptUrl);
+  var bookmarklet = buildBookmarklet(spriteDataUrl);
 
   fs.writeFileSync(OUT_JS, minified + '\n');
-  fs.writeFileSync(OUT_HTML, buildHtml(opts.baseUrl, loaderBookmarklet, scriptUrl, spriteUrl));
+  fs.writeFileSync(OUT_TXT, bookmarklet + '\n');
+  fs.writeFileSync(OUT_HTML, buildHtml(bookmarklet));
 
   console.log('Wrote ' + OUT_JS);
+  console.log('Wrote ' + OUT_TXT);
   console.log('Wrote ' + OUT_HTML);
-  console.log('Base URL: ' + opts.baseUrl);
-  console.log('Bookmarklet length: ' + loaderBookmarklet.length + ' chars');
+  console.log('Bookmarklet length: ' + bookmarklet.length + ' chars');
 }
 
 main();
