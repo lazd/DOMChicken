@@ -1,6 +1,16 @@
 var DinoChicken = (function () {
   var SPRITE_SIZE = 64;
   var FRAME_RATE = 12;
+  var DIR = {
+    N: 0,
+    NE: 1,
+    E: 2,
+    SE: 3,
+    S: 4,
+    SW: 5,
+    W: 6,
+    NW: 7
+  };
 
   var util = {
     getRadians: function (direction) {
@@ -92,25 +102,41 @@ var DinoChicken = (function () {
     this.setFrame(animKey, this.frameIndex);
   };
 
-  Chicken.prototype.advanceFrame = function (time) {
-    if (!this.animating || !this.currentAnim) return;
+  Chicken.prototype.advanceFrame = function (time, loop) {
+    if (!this.animating || !this.currentAnim) return false;
     var frames = this.animations[this.currentAnim];
-    if (!frames || frames.length <= 1) return;
-    if (time - this.lastFrameTime >= 1000 / FRAME_RATE) {
-      var prevFrame = this.frameIndex;
-      this.frameIndex = (this.frameIndex + 1) % frames.length;
-      this.el.style.backgroundPosition = (-frames[this.frameIndex]) + 'px 0';
-      this.lastFrameTime = time;
+    if (!frames || frames.length <= 1) return false;
+    if (loop === undefined) loop = true;
 
-      if (
-        this.currentAnim.indexOf('picking_') === 0 &&
-        this.frameIndex === 4 &&
-        prevFrame !== 4 &&
-        this.onPeck
-      ) {
-        this.onPeck();
+    if (time - this.lastFrameTime >= 1000 / FRAME_RATE) {
+      var atLastFrame = this.frameIndex >= frames.length - 1;
+
+      if (!atLastFrame) {
+        this.frameIndex += 1;
+        this.el.style.backgroundPosition = (-frames[this.frameIndex]) + 'px 0';
+      } else if (loop) {
+        this.frameIndex = 0;
+        this.el.style.backgroundPosition = (-frames[0]) + 'px 0';
+      } else {
+        this.animating = false;
+        this.lastFrameTime = time;
+        return true;
       }
+
+      this.lastFrameTime = time;
     }
+
+    return false;
+  };
+
+  Chicken.prototype.startPeck = function () {
+    this.picking = true;
+    this.frameIndex = 0;
+    this.playAnim('picking');
+  };
+
+  Chicken.prototype.cancelPeck = function () {
+    this.picking = false;
   };
 
   Chicken.prototype.update = function (time, stageWidth, stageHeight, playerDir) {
@@ -120,10 +146,10 @@ var DinoChicken = (function () {
       return;
     }
 
-    if (this.picking) {
-      this.playAnim('picking');
-      this.advanceFrame(time);
-    } else if (playerDir !== null) {
+    if (playerDir !== null) {
+      if (this.picking) {
+        this.cancelPeck();
+      }
       this.dir = playerDir;
       var timeDiff = time - this.lastTime;
       var radians = util.getRadians(playerDir);
@@ -132,7 +158,20 @@ var DinoChicken = (function () {
       var bounded = util.isOutOfBounds(SPRITE_SIZE, newX, newY, stageWidth, stageHeight);
       this.setPosition(bounded[1], bounded[2]);
       this.playAnim('running');
-      this.advanceFrame(time);
+      this.advanceFrame(time, true);
+    } else if (this.picking) {
+      var peckFrame = this.frameIndex;
+      this.playAnim('picking');
+      var peckFinished = this.advanceFrame(time, false);
+
+      if (peckFrame !== 4 && this.frameIndex === 4 && this.onPeckHit) {
+        this.onPeckHit();
+      }
+
+      if (peckFinished) {
+        this.picking = false;
+        this.setRestPose();
+      }
     } else {
       this.setRestPose();
     }
@@ -175,6 +214,17 @@ var DinoChicken = (function () {
         image-rendering: pixelated;
         image-rendering: crisp-edges;
       }
+      .dino-chicken-root .dino-chicken-peck-dot {
+        position: fixed;
+        width: 4px;
+        height: 4px;
+        border-radius: 50%;
+        background: #e33;
+        transform: translate(-50%, -50%);
+        display: none;
+        pointer-events: none;
+        z-index: 2;
+      }
     `;
   }
 
@@ -197,11 +247,15 @@ var DinoChicken = (function () {
     var sprite = document.createElement('div');
     sprite.className = 'dino-chicken-sprite';
 
+    var peckDot = document.createElement('div');
+    peckDot.className = 'dino-chicken-peck-dot';
+
     stage.appendChild(sprite);
+    stage.appendChild(peckDot);
     root.appendChild(hintEl);
     root.appendChild(stage);
 
-    return { root: root, stage: stage, sprite: sprite };
+    return { root: root, stage: stage, sprite: sprite, peckDot: peckDot };
   }
 
   function mount(config) {
@@ -222,25 +276,92 @@ var DinoChicken = (function () {
     var keys = { up: false, down: false, left: false, right: false };
     var rafId = 0;
     var hiddenElements = [];
+    var PECK_HIT_RADIUS = 40;
 
-    function hideElementUnderChicken() {
+    function isIgnoredPeckElement(el) {
+      return (
+        !el ||
+        dom.root.contains(el) ||
+        el === document.documentElement ||
+        el === document.body ||
+        (el.classList && el.classList.contains('peck-targets')) ||
+        el.style.visibility === 'hidden'
+      );
+    }
+
+    function getPeckPoint() {
       var rect = dom.sprite.getBoundingClientRect();
-      var x = rect.left + rect.width / 2;
-      var y = rect.top + rect.height * 0.75;
+      var radians = util.getRadians(chicken.dir);
+      var centerX = rect.left + rect.width / 2;
+      var centerY = rect.top + rect.height / 2;
+      var peckDistance = rect.width / 2 - 16;
+      var x = centerX + Math.cos(radians) * peckDistance;
+      var y = centerY + Math.sin(radians) * peckDistance;
+
+      if (chicken.dir === DIR.N || chicken.dir === DIR.E || chicken.dir === DIR.W) {
+        y += 8;
+      }
+      else if (chicken.dir === DIR.SW) {
+        y += 8;
+        x += 2;
+      }
+      else if (chicken.dir === DIR.SE) {
+        y += 4;
+        x += 2;
+      }
+
+      return { x: x, y: y };
+    }
+
+    function updatePeckDot() {
+      if (!chicken.picking) {
+        dom.peckDot.style.display = 'none';
+        return;
+      }
+
+      var point = getPeckPoint();
+      dom.peckDot.style.display = 'block';
+      dom.peckDot.style.left = point.x + 'px';
+      dom.peckDot.style.top = point.y + 'px';
+    }
+
+    function findPeckTargetAt(x, y) {
+      dom.root.style.visibility = 'hidden';
       var elements = document.elementsFromPoint(x, y);
+      dom.root.style.visibility = '';
 
       for (var i = 0; i < elements.length; i++) {
-        var el = elements[i];
-        if (dom.root.contains(el)) continue;
-        if (el === document.documentElement || el === document.body) continue;
+        if (!isIgnoredPeckElement(elements[i])) {
+          return elements[i];
+        }
+      }
 
+      return null;
+    }
+
+    function doPeck() {
+      var point = getPeckPoint();
+      var el = findPeckTargetAt(point.x, point.y);
+
+      if (el) {
         hiddenElements.push({ el: el, visibility: el.style.visibility });
         el.style.visibility = 'hidden';
-        break;
       }
     }
 
-    chicken.onPeck = hideElementUnderChicken;
+    function startPeckIfReady() {
+      if (chicken.picking || getDirFromKeys() !== null) return;
+      chicken.startPeck();
+    }
+
+    function applyFacingFromKeys() {
+      var dir = getDirFromKeys();
+      if (dir !== null) {
+        chicken.dir = dir;
+      }
+    }
+
+    chicken.onPeckHit = doPeck;
 
     function getDirFromKeys() {
       var up = keys.up && !keys.down;
@@ -265,11 +386,14 @@ var DinoChicken = (function () {
 
     function onKeyDown(e) {
       switch (e.key) {
-        case 'ArrowUp': keys.up = true; e.preventDefault(); break;
-        case 'ArrowDown': keys.down = true; e.preventDefault(); break;
-        case 'ArrowLeft': keys.left = true; e.preventDefault(); break;
-        case 'ArrowRight': keys.right = true; e.preventDefault(); break;
-        case ' ': chicken.picking = true; e.preventDefault(); break;
+        case 'ArrowUp': keys.up = true; applyFacingFromKeys(); e.preventDefault(); break;
+        case 'ArrowDown': keys.down = true; applyFacingFromKeys(); e.preventDefault(); break;
+        case 'ArrowLeft': keys.left = true; applyFacingFromKeys(); e.preventDefault(); break;
+        case 'ArrowRight': keys.right = true; applyFacingFromKeys(); e.preventDefault(); break;
+        case ' ':
+          if (!e.repeat) startPeckIfReady();
+          e.preventDefault();
+          break;
       }
     }
 
@@ -279,7 +403,7 @@ var DinoChicken = (function () {
         case 'ArrowDown': keys.down = false; e.preventDefault(); break;
         case 'ArrowLeft': keys.left = false; e.preventDefault(); break;
         case 'ArrowRight': keys.right = false; e.preventDefault(); break;
-        case ' ': chicken.picking = false; e.preventDefault(); break;
+        case ' ': e.preventDefault(); break;
       }
     }
 
@@ -296,6 +420,7 @@ var DinoChicken = (function () {
 
     function gameLoop(time) {
       chicken.update(time, gameEl.clientWidth, gameEl.clientHeight, getDirFromKeys());
+      updatePeckDot();
       rafId = requestAnimationFrame(gameLoop);
     }
 
