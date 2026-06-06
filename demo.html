@@ -1,0 +1,47 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>Chicken Demo</title>
+    <style>
+      html, body {
+        margin: 0;
+        min-height: 100%;
+        background: #c4a574;
+      }
+
+      .peck-target {
+        position: fixed;
+        font-size: 48px;
+        line-height: 1;
+        padding: 12px;
+        user-select: none;
+      }
+    </style>
+  </head>
+  <body>
+    <span class="peck-target" style="top: 12%; left: 8%;">🌽</span>
+    <span class="peck-target" style="top: 18%; left: 72%;">🐛</span>
+    <span class="peck-target" style="top: 28%; left: 42%;">🌾</span>
+    <span class="peck-target" style="top: 35%; left: 18%;">🥚</span>
+    <span class="peck-target" style="top: 42%; left: 85%;">🪱</span>
+    <span class="peck-target" style="top: 55%; left: 55%;">🍞</span>
+    <span class="peck-target" style="top: 62%; left: 12%;">🌻</span>
+    <span class="peck-target" style="top: 68%; left: 78%;">🐜</span>
+    <span class="peck-target" style="top: 75%; left: 32%;">🥕</span>
+    <span class="peck-target" style="top: 82%; left: 62%;">🍎</span>
+    <span class="peck-target" style="top: 22%; left: 88%;">🦗</span>
+    <span class="peck-target" style="top: 48%; left: 28%;">🌰</span>
+    <span class="peck-target" style="top: 8%; left: 48%;">🐝</span>
+    <span class="peck-target" style="top: 88%; left: 22%;">🍇</span>
+    <span class="peck-target" style="top: 38%; left: 68%;">🥬</span>
+
+    <script src="./src/chicken-widget.js"></script>
+    <script>
+      DinoChicken.mount({
+        mode: 'demo',
+        spriteUrl: './sprites/chicken/chicken-sprite.png'
+      });
+    </script>
+  </body>
+</html>
