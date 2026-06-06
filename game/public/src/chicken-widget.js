@@ -298,8 +298,28 @@ var DinoChicken = (function () {
       var x = centerX + Math.cos(radians) * peckDistance;
       var y = centerY + Math.sin(radians) * peckDistance;
 
-      if (chicken.dir === DIR.N || chicken.dir === DIR.E || chicken.dir === DIR.W) {
-        y += 8;
+      if (chicken.dir === DIR.N) {
+        y += 12;
+        x -= 3;
+      }
+      else if (chicken.dir === DIR.NW) {
+        y += 15;
+      }
+      else if (chicken.dir === DIR.NE) {
+        y += 11;
+        x -= 2;
+      }
+      else if (chicken.dir === DIR.W) {
+        y += 11;
+        x += 2;
+      }
+      else if (chicken.dir === DIR.E) {
+        y += 9;
+        x -= 3;
+      }
+      else if (chicken.dir === DIR.S) {
+        x += 3;
+        y += 4;
       }
       else if (chicken.dir === DIR.SW) {
         y += 8;
@@ -314,10 +334,12 @@ var DinoChicken = (function () {
     }
 
     function updatePeckDot() {
+      /*
       if (!chicken.picking) {
         dom.peckDot.style.display = 'none';
         return;
       }
+      */
 
       var point = getPeckPoint();
       dom.peckDot.style.display = 'block';
