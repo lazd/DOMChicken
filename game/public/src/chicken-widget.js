@@ -12,6 +12,17 @@ var DinoChicken = (function () {
     NW: 7
   };
 
+  var PECK_DIR_OFFSETS = {
+    0: { x: -3 / SPRITE_SIZE, y: 12 / SPRITE_SIZE },
+    1: { x: -2 / SPRITE_SIZE, y: 11 / SPRITE_SIZE },
+    2: { x: -3 / SPRITE_SIZE, y: 9 / SPRITE_SIZE },
+    3: { x: 2 / SPRITE_SIZE, y: 4 / SPRITE_SIZE },
+    4: { x: 3 / SPRITE_SIZE, y: 4 / SPRITE_SIZE },
+    5: { x: 2 / SPRITE_SIZE, y: 8 / SPRITE_SIZE },
+    6: { x: 2 / SPRITE_SIZE, y: 11 / SPRITE_SIZE },
+    7: { x: 0, y: 15 / SPRITE_SIZE }
+  };
+
   var util = {
     getRadians: function (direction) {
       return Math.PI * 2 / (8 / direction) - Math.PI / 2;
@@ -51,10 +62,11 @@ var DinoChicken = (function () {
     this.x = x;
     this.y = y;
     this.dir = 0;
+    this.scale = 1;
     this.picking = false;
     this.lastTime = 0;
     this.lastFrameTime = 0;
-    this.moveSpeed = 0.1;
+    this.moveSpeed = 0.07;
     this.frameIndex = 0;
     this.animating = false;
     this.currentAnim = null;
@@ -77,6 +89,15 @@ var DinoChicken = (function () {
     this.y = y;
     this.el.style.left = x + 'px';
     this.el.style.top = y + 'px';
+  };
+
+  Chicken.prototype.getDisplaySize = function () {
+    return SPRITE_SIZE * this.scale;
+  };
+
+  Chicken.prototype.setScale = function (scale) {
+    this.scale = scale;
+    this.el.style.transform = scale === 1 ? '' : 'scale(' + scale + ')';
   };
 
   Chicken.prototype.setFrame = function (animKey, frameIndex) {
@@ -154,9 +175,10 @@ var DinoChicken = (function () {
       this.dir = playerDir;
       var timeDiff = time - this.lastTime;
       var radians = util.getRadians(playerDir);
-      var newX = this.x + Math.cos(radians) * timeDiff * this.moveSpeed;
-      var newY = this.y + Math.sin(radians) * timeDiff * this.moveSpeed;
-      var bounded = util.isOutOfBounds(SPRITE_SIZE, newX, newY, stageWidth, stageHeight);
+      var speed = this.moveSpeed * this.scale;
+      var newX = this.x + Math.cos(radians) * timeDiff * speed;
+      var newY = this.y + Math.sin(radians) * timeDiff * speed;
+      var bounded = util.isOutOfBounds(this.getDisplaySize(), newX, newY, stageWidth, stageHeight);
       this.setPosition(bounded[1], bounded[2]);
       this.playAnim('running');
       this.advanceFrame(time, true);
@@ -216,6 +238,7 @@ var DinoChicken = (function () {
         background-repeat: no-repeat;
         image-rendering: pixelated;
         image-rendering: crisp-edges;
+        transform-origin: top left;
         z-index: 3;
       }
       .dino-chicken-root .dino-chicken-peck-dot {
@@ -241,7 +264,7 @@ var DinoChicken = (function () {
   function createRoot(config) {
     var mode = config.mode || 'demo';
     var hint = config.hint ||
-      'arrow keys move \u00b7 space peck' +
+      'arrow keys move \u00b7 space peck \u00b7 1/2 size' +
       (mode === 'inject' ? ' \u00b7 click bookmark again to remove' : '');
 
     var root = document.createElement('div');
@@ -301,46 +324,33 @@ var DinoChicken = (function () {
 
     function getPeckPoint() {
       var rect = dom.sprite.getBoundingClientRect();
+      var spriteSize = rect.width;
       var radians = util.getRadians(chicken.dir);
-      var centerX = rect.left + rect.width / 2;
-      var centerY = rect.top + rect.height / 2;
-      var peckDistance = rect.width / 2 - 16;
+      var centerX = rect.left + spriteSize / 2;
+      var centerY = rect.top + spriteSize / 2;
+      var peckDistance = spriteSize / 2 - (16 / SPRITE_SIZE) * spriteSize;
       var x = centerX + Math.cos(radians) * peckDistance;
       var y = centerY + Math.sin(radians) * peckDistance;
+      var offset = PECK_DIR_OFFSETS[chicken.dir];
 
-      if (chicken.dir === DIR.N) {
-        y += 12;
-        x -= 3;
-      }
-      else if (chicken.dir === DIR.NW) {
-        y += 15;
-      }
-      else if (chicken.dir === DIR.NE) {
-        y += 11;
-        x -= 2;
-      }
-      else if (chicken.dir === DIR.W) {
-        y += 11;
-        x += 2;
-      }
-      else if (chicken.dir === DIR.E) {
-        y += 9;
-        x -= 3;
-      }
-      else if (chicken.dir === DIR.S) {
-        x += 3;
-        y += 4;
-      }
-      else if (chicken.dir === DIR.SW) {
-        y += 8;
-        x += 2;
-      }
-      else if (chicken.dir === DIR.SE) {
-        y += 4;
-        x += 2;
+      if (offset) {
+        x += offset.x * spriteSize;
+        y += offset.y * spriteSize;
       }
 
       return { x: x, y: y };
+    }
+
+    function setChickenScale(scale) {
+      chicken.setScale(scale);
+      var bounded = util.isOutOfBounds(
+        chicken.getDisplaySize(),
+        chicken.x,
+        chicken.y,
+        gameEl.clientWidth,
+        gameEl.clientHeight
+      );
+      chicken.setPosition(bounded[1], bounded[2]);
     }
 
     function updatePeckDot() {
@@ -371,13 +381,83 @@ var DinoChicken = (function () {
       return null;
     }
 
+    function getCaretPositionFromPoint(x, y) {
+      if (document.caretPositionFromPoint) {
+        return document.caretPositionFromPoint(x, y);
+      }
+      if (document.caretsFromPoint) {
+        var carets = document.caretsFromPoint(x, y);
+        if (carets && carets.length) return carets[0];
+      }
+      if (document.caretRangeFromPoint) {
+        var range = document.caretRangeFromPoint(x, y);
+        if (range) {
+          return { offsetNode: range.startContainer, offset: range.startOffset };
+        }
+      }
+      return null;
+    }
+
+    function wrapCharAtCaret(pos) {
+      var node = pos.offsetNode;
+      var offset = pos.offset;
+
+      if (!node || node.nodeType !== Node.TEXT_NODE) {
+        return null;
+      }
+
+      var text = node.textContent;
+      if (!text || !text.length) {
+        return null;
+      }
+
+      if (offset >= text.length) {
+        offset = text.length - 1;
+      }
+      if (offset < 0 || !text.charAt(offset)) {
+        return null;
+      }
+
+      var textNode = node;
+      if (offset > 0) {
+        textNode = textNode.splitText(offset);
+      }
+      if (textNode.length > 1) {
+        textNode.splitText(1);
+      }
+
+      var span = document.createElement('span');
+      span.style.visibility = 'hidden';
+      textNode.parentNode.insertBefore(span, textNode);
+      span.appendChild(textNode);
+
+      return span;
+    }
+
+    function unwrapCharSpan(span) {
+      var parent = span.parentNode;
+      if (!parent) return;
+
+      var textNode = document.createTextNode(span.textContent);
+      parent.insertBefore(textNode, span);
+      parent.removeChild(span);
+      parent.normalize();
+    }
+
     function doPeck() {
       var point = getPeckPoint();
       var el = findPeckTargetAt(point.x, point.y);
 
       if (el) {
-        hiddenElements.push({ el: el, visibility: el.style.visibility });
-        el.style.visibility = 'hidden';
+        var pos = getCaretPositionFromPoint(point.x, point.y);
+        var charSpan = pos ? wrapCharAtCaret(pos) : null;
+
+        if (charSpan) {
+          hiddenElements.push({ type: 'char', span: charSpan });
+        } else {
+          hiddenElements.push({ type: 'element', el: el, visibility: el.style.visibility });
+          el.style.visibility = 'hidden';
+        }
       }
     }
 
@@ -426,6 +506,14 @@ var DinoChicken = (function () {
           if (!e.repeat) startPeckIfReady();
           e.preventDefault();
           break;
+        case '1':
+          if (!e.repeat) setChickenScale(1);
+          e.preventDefault();
+          break;
+        case '2':
+          if (!e.repeat) setChickenScale(2);
+          e.preventDefault();
+          break;
       }
     }
 
@@ -441,7 +529,7 @@ var DinoChicken = (function () {
 
     function onResize() {
       var bounded = util.isOutOfBounds(
-        SPRITE_SIZE,
+        chicken.getDisplaySize(),
         chicken.x,
         chicken.y,
         gameEl.clientWidth,
@@ -463,7 +551,12 @@ var DinoChicken = (function () {
       window.removeEventListener('resize', onResize);
 
       for (var i = 0; i < hiddenElements.length; i++) {
-        hiddenElements[i].el.style.visibility = hiddenElements[i].visibility;
+        var hidden = hiddenElements[i];
+        if (hidden.type === 'char') {
+          unwrapCharSpan(hidden.span);
+        } else {
+          hidden.el.style.visibility = hidden.visibility;
+        }
       }
 
       if (style.parentNode) style.parentNode.removeChild(style);
