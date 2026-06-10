@@ -324,9 +324,9 @@ var DinoChicken = (function () {
     var letterCache = { candidates: null, builtAt: 0, TTL: 1500 };
     var lastCoordRefresh = 0;
     var lastPeckAlignCheck = 0;
-    var LETTER_SCAN_MAX_NODES = 100;
-    var LETTER_SCAN_MAX_CANDIDATES = 180;
-    var VIEWPORT_PAD = 400;
+    var LETTER_SCAN_MAX_NODES = 120;
+    var LETTER_SCAN_MAX_CANDIDATES = 240;
+    var VIEWPORT_PAD = 200;
 
     var autonomous = {
       peckTarget: null,
@@ -509,9 +509,62 @@ var DinoChicken = (function () {
       );
     }
 
+    function sampleVisibleTextNodes(nodes, maxNodes) {
+      if (nodes.length <= maxNodes) return nodes;
+
+      var cellSize = Math.max(
+        180,
+        Math.min(window.innerWidth, window.innerHeight) / 3
+      );
+      var cellMap = {};
+      var cellKeys = [];
+      var i;
+      var node;
+      var parent;
+      var rect;
+      var key;
+      var midX;
+      var midY;
+
+      for (i = 0; i < nodes.length; i++) {
+        node = nodes[i];
+        parent = node.parentElement;
+        if (!parent) continue;
+        rect = parent.getBoundingClientRect();
+        midX = rect.left + rect.width / 2;
+        midY = rect.top + rect.height / 2;
+        key = Math.floor(midX / cellSize) + ',' + Math.floor(midY / cellSize);
+        if (!cellMap[key]) {
+          cellMap[key] = [];
+          cellKeys.push(key);
+        }
+        cellMap[key].push(node);
+      }
+
+      var sampled = [];
+      var ci = 0;
+      while (sampled.length < maxNodes && cellKeys.length) {
+        key = cellKeys[ci % cellKeys.length];
+        var bucket = cellMap[key];
+        if (bucket.length) {
+          sampled.push(bucket.shift());
+          if (!bucket.length) {
+            cellKeys.splice(ci % cellKeys.length, 1);
+            if (!cellKeys.length) break;
+          }
+        } else {
+          cellKeys.splice(ci % cellKeys.length, 1);
+          if (!cellKeys.length) break;
+          continue;
+        }
+        ci += 1;
+      }
+
+      return sampled;
+    }
+
     function buildLetterCache() {
-      var candidates = [];
-      var nodesScanned = 0;
+      var visibleNodes = [];
       var walker = document.createTreeWalker(
         document.body,
         NodeFilter.SHOW_TEXT,
@@ -528,12 +581,7 @@ var DinoChicken = (function () {
         }
       );
 
-      while (
-        walker.nextNode() &&
-        candidates.length < LETTER_SCAN_MAX_CANDIDATES &&
-        nodesScanned < LETTER_SCAN_MAX_NODES
-      ) {
-        nodesScanned += 1;
+      while (walker.nextNode()) {
         var node = walker.currentNode;
         var parent = node.parentElement;
         if (!parent) continue;
@@ -541,10 +589,26 @@ var DinoChicken = (function () {
         var parentRect = parent.getBoundingClientRect();
         if (!isRectNearViewport(parentRect)) continue;
 
-        var text = node.textContent;
-        var offsets = pickOffsetsInText(text);
-        var j;
-        var point;
+        visibleNodes.push(node);
+      }
+
+      var nodesToMeasure = sampleVisibleTextNodes(
+        visibleNodes,
+        LETTER_SCAN_MAX_NODES
+      );
+      var candidates = [];
+      var n;
+      var node;
+      var text;
+      var offsets;
+      var j;
+      var point;
+
+      for (n = 0; n < nodesToMeasure.length; n++) {
+        if (candidates.length >= LETTER_SCAN_MAX_CANDIDATES) break;
+        node = nodesToMeasure[n];
+        text = node.textContent;
+        offsets = pickOffsetsInText(text);
 
         for (j = 0; j < offsets.length; j++) {
           if (candidates.length >= LETTER_SCAN_MAX_CANDIDATES) break;
