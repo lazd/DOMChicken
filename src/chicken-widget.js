@@ -27,6 +27,12 @@ var DinoChicken = (function () {
     getRadians: function (direction) {
       return Math.PI * 2 / (8 / direction) - Math.PI / 2;
     },
+    getDirFromDelta: function (dx, dy) {
+      if (dx === 0 && dy === 0) return 0;
+      var angle = Math.atan2(dy, dx) + Math.PI / 2;
+      if (angle < 0) angle += Math.PI * 2;
+      return Math.round(angle / (Math.PI / 4)) % 8;
+    },
     isOutOfBounds: function (size, left, top, maxX, maxY) {
       var minCoord = -size / 2;
       var maxLeft = maxX - size / 2;
@@ -63,6 +69,8 @@ var DinoChicken = (function () {
     this.y = y;
     this.dir = 0;
     this.scale = 1;
+    this.autonomousPeck = false;
+    this.autoPeckLetter = null;
     this.picking = false;
     this.lastTime = 0;
     this.lastFrameTime = 0;
@@ -309,7 +317,328 @@ var DinoChicken = (function () {
     var keys = { up: false, down: false, left: false, right: false };
     var rafId = 0;
     var hiddenElements = [];
-    var PECK_HIT_RADIUS = 40;
+    var lastPlayerInputTime = null;
+    var IDLE_BEFORE_AUTO_MS = 2000;
+
+    var autonomous = {
+      peckTarget: null,
+      moveUntil: 0,
+      pauseUntil: 0,
+      moveDir: 0,
+      pecksSinceWalk: 0,
+      mustWalkUntil: 0,
+
+      reset: function (time) {
+        this.peckTarget = null;
+        this.moveUntil = 0;
+        this.pauseUntil = time + 400;
+        this.pecksSinceWalk = 0;
+        this.mustWalkUntil = 0;
+      },
+
+      isTargetValid: function (target) {
+        if (!target) return false;
+        if (target.node) {
+          return target.node.parentNode && isPeckableTextNode(target.node);
+        }
+        if (target.el) {
+          return target.el.parentNode && target.el.style.visibility !== 'hidden';
+        }
+        return false;
+      },
+
+      refreshTarget: function (time) {
+        var center = getChickenCenter();
+        var minDist = 0;
+        if (time < this.mustWalkUntil) {
+          minDist = center.peckReach * 1.3;
+        }
+        this.peckTarget = pickAutonomousTarget(minDist);
+        this.moveUntil = time + 1600 + Math.random() * 800;
+        if (time < this.mustWalkUntil) {
+          this.moveUntil = this.mustWalkUntil;
+        }
+        if (this.peckTarget) {
+          var dx = this.peckTarget.x - center.x;
+          var dy = this.peckTarget.y - center.y;
+          this.moveDir = util.getDirFromDelta(dx, dy);
+        }
+      },
+
+      getMoveDir: function (time, chicken) {
+        if (chicken.picking || time < this.pauseUntil) {
+          return null;
+        }
+
+        if (!this.isTargetValid(this.peckTarget) || time >= this.moveUntil) {
+          this.refreshTarget(time);
+        }
+
+        if (!this.peckTarget) {
+          return null;
+        }
+
+        refreshLetterTargetCoords(this.peckTarget);
+
+        if (time < this.mustWalkUntil) {
+          chicken.dir = this.moveDir;
+          return this.moveDir;
+        }
+
+        if (!this.peckTarget.node) {
+          chicken.dir = this.moveDir;
+          return this.moveDir;
+        }
+
+        var peckDir = findPeckDirForLetter(this.peckTarget);
+        if (peckDir !== null) {
+          chicken.dir = peckDir;
+          chicken.autonomousPeck = true;
+          chicken.autoPeckLetter = {
+            node: this.peckTarget.node,
+            offset: this.peckTarget.offset
+          };
+          chicken.startPeck();
+          this.peckTarget = null;
+          this.pauseUntil = time + 400 + Math.random() * 400;
+          this.pecksSinceWalk += 1;
+          if (this.pecksSinceWalk >= 2) {
+            this.pecksSinceWalk = 0;
+            this.mustWalkUntil = time + 1600 + Math.random() * 800;
+            this.moveUntil = this.mustWalkUntil;
+            this.refreshTarget(time);
+          } else {
+            this.moveUntil = 0;
+          }
+          return null;
+        }
+
+        chicken.dir = this.moveDir;
+        return this.moveDir;
+      }
+    };
+
+    function isPeckableTextNode(node) {
+      var el = node.parentElement;
+      while (el) {
+        if (dom.root.contains(el)) return false;
+        if (el.style && el.style.visibility === 'hidden') return false;
+        el = el.parentElement;
+      }
+      return true;
+    }
+
+    function getCharClientPoint(node, offset) {
+      try {
+        var range = document.createRange();
+        range.setStart(node, offset);
+        range.setEnd(node, Math.min(offset + 1, node.length));
+        var rect = range.getBoundingClientRect();
+        if (!rect.width && !rect.height) return null;
+        return {
+          x: rect.left + rect.width / 2,
+          y: rect.top + rect.height / 2,
+          node: node,
+          offset: offset
+        };
+      } catch (err) {
+        return null;
+      }
+    }
+
+    function collectLetterTargets() {
+      var candidates = [];
+      var walker = document.createTreeWalker(
+        document.body,
+        NodeFilter.SHOW_TEXT,
+        {
+          acceptNode: function (node) {
+            if (!node.textContent || !/\S/.test(node.textContent)) {
+              return NodeFilter.FILTER_REJECT;
+            }
+            if (!isPeckableTextNode(node)) {
+              return NodeFilter.FILTER_REJECT;
+            }
+            return NodeFilter.FILTER_ACCEPT;
+          }
+        }
+      );
+
+      while (walker.nextNode()) {
+        var node = walker.currentNode;
+        var text = node.textContent;
+        for (var i = 0; i < text.length; i++) {
+          if (/\s/.test(text.charAt(i))) continue;
+          var point = getCharClientPoint(node, i);
+          if (point) candidates.push(point);
+        }
+      }
+
+      return candidates;
+    }
+
+    function getChickenCenter() {
+      var rect = dom.sprite.getBoundingClientRect();
+      return {
+        x: rect.left + rect.width / 2,
+        y: rect.top + rect.height / 2,
+        peckReach: rect.width * 0.55
+      };
+    }
+
+    function addDistances(candidates, center) {
+      var i;
+      var point;
+      var dx;
+      var dy;
+
+      for (i = 0; i < candidates.length; i++) {
+        point = candidates[i];
+        dx = point.x - center.x;
+        dy = point.y - center.y;
+        point.dist = Math.sqrt(dx * dx + dy * dy);
+      }
+
+      return candidates;
+    }
+
+    function pickFromClosestPool(candidates, poolSize) {
+      candidates.sort(function (a, b) { return a.dist - b.dist; });
+      var pool = candidates.slice(0, Math.min(poolSize, candidates.length));
+      return pool[Math.floor(Math.random() * pool.length)];
+    }
+
+    function pickFromFarthestPool(candidates, poolSize) {
+      candidates.sort(function (a, b) { return b.dist - a.dist; });
+      var pool = candidates.slice(0, Math.min(poolSize, candidates.length));
+      return pool[Math.floor(Math.random() * pool.length)];
+    }
+
+    function pickAutonomousTarget(minDist) {
+      var center = getChickenCenter();
+      var walkMin = minDist || center.peckReach * 1.25;
+      var letterCandidates = addDistances(collectLetterTargets(), center);
+
+      if (letterCandidates.length) {
+        var walkCandidates = [];
+        var i;
+        for (i = 0; i < letterCandidates.length; i++) {
+          if (letterCandidates[i].dist >= walkMin) {
+            walkCandidates.push(letterCandidates[i]);
+          }
+        }
+        if (walkCandidates.length) {
+          return pickFromClosestPool(walkCandidates, 12);
+        }
+        return pickFromFarthestPool(letterCandidates, 8);
+      }
+
+      var emojiTargets = document.querySelectorAll('.peck-target');
+      var emojiCandidates = [];
+      var el;
+      var emojiRect;
+
+      for (i = 0; i < emojiTargets.length; i++) {
+        el = emojiTargets[i];
+        if (isIgnoredPeckElement(el)) continue;
+        emojiRect = el.getBoundingClientRect();
+        if (!emojiRect.width && !emojiRect.height) continue;
+        emojiCandidates.push({
+          x: emojiRect.left + emojiRect.width / 2,
+          y: emojiRect.top + emojiRect.height / 2,
+          el: el
+        });
+      }
+
+      if (emojiCandidates.length) {
+        addDistances(emojiCandidates, center);
+        var emojiWalkCandidates = [];
+        for (i = 0; i < emojiCandidates.length; i++) {
+          if (emojiCandidates[i].dist >= walkMin) {
+            emojiWalkCandidates.push(emojiCandidates[i]);
+          }
+        }
+        if (emojiWalkCandidates.length) {
+          return pickFromClosestPool(emojiWalkCandidates, 6);
+        }
+        return pickFromFarthestPool(emojiCandidates, 4);
+      }
+
+      return null;
+    }
+
+    function getCharRect(node, offset) {
+      try {
+        var range = document.createRange();
+        range.setStart(node, offset);
+        range.setEnd(node, Math.min(offset + 1, node.length));
+        return range.getBoundingClientRect();
+      } catch (err) {
+        return null;
+      }
+    }
+
+    function refreshLetterTargetCoords(letter) {
+      if (!letter || !letter.node) return;
+      var point = getCharClientPoint(letter.node, letter.offset);
+      if (point) {
+        letter.x = point.x;
+        letter.y = point.y;
+      }
+    }
+
+    function getLetterAlignThreshold(letter) {
+      var rect = getCharRect(letter.node, letter.offset);
+      if (!rect || (!rect.width && !rect.height)) return 8;
+      var size = Math.max(rect.width, rect.height, 8);
+      return Math.max(4, size * 0.35);
+    }
+
+    function getPeckPointForDir(dir) {
+      var rect = dom.sprite.getBoundingClientRect();
+      var spriteSize = rect.width;
+      var radians = util.getRadians(dir);
+      var centerX = rect.left + spriteSize / 2;
+      var centerY = rect.top + spriteSize / 2;
+      var peckDistance = spriteSize / 2 - (16 / SPRITE_SIZE) * spriteSize;
+      var x = centerX + Math.cos(radians) * peckDistance;
+      var y = centerY + Math.sin(radians) * peckDistance;
+      var offset = PECK_DIR_OFFSETS[dir];
+
+      if (offset) {
+        x += offset.x * spriteSize;
+        y += offset.y * spriteSize;
+      }
+
+      return { x: x, y: y };
+    }
+
+    function findPeckDirForLetter(letter) {
+      var bestDir = null;
+      var bestDist = Infinity;
+      var threshold = getLetterAlignThreshold(letter);
+      var i;
+      var point;
+      var dist;
+
+      for (i = 0; i < 8; i++) {
+        point = getPeckPointForDir(i);
+        dist = Math.sqrt(
+          (point.x - letter.x) * (point.x - letter.x) +
+          (point.y - letter.y) * (point.y - letter.y)
+        );
+        if (dist < bestDist) {
+          bestDist = dist;
+          bestDir = i;
+        }
+      }
+
+      if (bestDist > threshold) {
+        return null;
+      }
+
+      return bestDir;
+    }
 
     function isIgnoredPeckElement(el) {
       return (
@@ -323,22 +652,7 @@ var DinoChicken = (function () {
     }
 
     function getPeckPoint() {
-      var rect = dom.sprite.getBoundingClientRect();
-      var spriteSize = rect.width;
-      var radians = util.getRadians(chicken.dir);
-      var centerX = rect.left + spriteSize / 2;
-      var centerY = rect.top + spriteSize / 2;
-      var peckDistance = spriteSize / 2 - (16 / SPRITE_SIZE) * spriteSize;
-      var x = centerX + Math.cos(radians) * peckDistance;
-      var y = centerY + Math.sin(radians) * peckDistance;
-      var offset = PECK_DIR_OFFSETS[chicken.dir];
-
-      if (offset) {
-        x += offset.x * spriteSize;
-        y += offset.y * spriteSize;
-      }
-
-      return { x: x, y: y };
+      return getPeckPointForDir(chicken.dir);
     }
 
     function setChickenScale(scale) {
@@ -398,11 +712,11 @@ var DinoChicken = (function () {
       return null;
     }
 
-    function wrapCharAtCaret(pos) {
-      var node = pos.offsetNode;
-      var offset = pos.offset;
-
-      if (!node || node.nodeType !== Node.TEXT_NODE) {
+    function wrapCharAtNode(node, offset) {
+      if (!node || node.nodeType !== Node.TEXT_NODE || !node.parentNode) {
+        return null;
+      }
+      if (!isPeckableTextNode(node)) {
         return null;
       }
 
@@ -434,6 +748,11 @@ var DinoChicken = (function () {
       return span;
     }
 
+    function wrapCharAtCaret(pos) {
+      if (!pos || !pos.offsetNode) return null;
+      return wrapCharAtNode(pos.offsetNode, pos.offset);
+    }
+
     function unwrapCharSpan(span) {
       var parent = span.parentNode;
       if (!parent) return;
@@ -445,20 +764,34 @@ var DinoChicken = (function () {
     }
 
     function doPeck() {
-      var point = getPeckPoint();
-      var el = findPeckTargetAt(point.x, point.y);
+      var charSpan = null;
 
-      if (el) {
+      if (chicken.autoPeckLetter) {
+        charSpan = wrapCharAtNode(
+          chicken.autoPeckLetter.node,
+          chicken.autoPeckLetter.offset
+        );
+        chicken.autoPeckLetter = null;
+      }
+
+      if (!charSpan) {
+        var point = getPeckPoint();
         var pos = getCaretPositionFromPoint(point.x, point.y);
-        var charSpan = pos ? wrapCharAtCaret(pos) : null;
+        charSpan = pos ? wrapCharAtCaret(pos) : null;
+      }
 
-        if (charSpan) {
-          hiddenElements.push({ type: 'char', span: charSpan });
-        } else {
+      if (charSpan) {
+        hiddenElements.push({ type: 'char', span: charSpan });
+      } else if (!chicken.autonomousPeck) {
+        var missPoint = getPeckPoint();
+        var el = findPeckTargetAt(missPoint.x, missPoint.y);
+        if (el) {
           hiddenElements.push({ type: 'element', el: el, visibility: el.style.visibility });
           el.style.visibility = 'hidden';
         }
       }
+
+      chicken.autonomousPeck = false;
     }
 
     function startPeckIfReady() {
@@ -494,6 +827,25 @@ var DinoChicken = (function () {
       if (left) return 6;
       if (right) return 2;
       return null;
+    }
+
+    function getMovementDir(time) {
+      var playerDir = getDirFromKeys();
+      if (playerDir !== null) {
+        lastPlayerInputTime = time;
+        autonomous.reset(time);
+        return playerDir;
+      }
+
+      if (lastPlayerInputTime === null) {
+        lastPlayerInputTime = time;
+      }
+
+      if (time - lastPlayerInputTime < IDLE_BEFORE_AUTO_MS) {
+        return null;
+      }
+
+      return autonomous.getMoveDir(time, chicken);
     }
 
     function onKeyDown(e) {
@@ -539,7 +891,7 @@ var DinoChicken = (function () {
     }
 
     function gameLoop(time) {
-      chicken.update(time, gameEl.clientWidth, gameEl.clientHeight, getDirFromKeys());
+      chicken.update(time, gameEl.clientWidth, gameEl.clientHeight, getMovementDir(time));
       updatePeckDot();
       rafId = requestAnimationFrame(gameLoop);
     }
