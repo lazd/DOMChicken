@@ -319,6 +319,14 @@ var DinoChicken = (function () {
     var hiddenElements = [];
     var lastPlayerInputTime = null;
     var IDLE_BEFORE_AUTO_MS = 2000;
+    var reusedRange = document.createRange();
+    var frameSnapshot = null;
+    var letterCache = { candidates: null, builtAt: 0, TTL: 1500 };
+    var lastCoordRefresh = 0;
+    var lastPeckAlignCheck = 0;
+    var LETTER_SCAN_MAX_NODES = 100;
+    var LETTER_SCAN_MAX_CANDIDATES = 180;
+    var VIEWPORT_PAD = 400;
 
     var autonomous = {
       peckTarget: null,
@@ -358,7 +366,8 @@ var DinoChicken = (function () {
         if (time < this.mustWalkUntil) {
           this.moveUntil = this.mustWalkUntil;
         }
-        if (this.peckTarget) {
+        if (this.peckTarget && this.peckTarget.node) {
+          this.peckTarget.alignThreshold = getLetterAlignThreshold(this.peckTarget);
           var dx = this.peckTarget.x - center.x;
           var dy = this.peckTarget.y - center.y;
           this.moveDir = util.getDirFromDelta(dx, dy);
@@ -378,7 +387,10 @@ var DinoChicken = (function () {
           return null;
         }
 
-        refreshLetterTargetCoords(this.peckTarget);
+        if (time - lastCoordRefresh >= 120) {
+          refreshLetterTargetCoords(this.peckTarget);
+          lastCoordRefresh = time;
+        }
 
         if (time < this.mustWalkUntil) {
           chicken.dir = this.moveDir;
@@ -389,6 +401,12 @@ var DinoChicken = (function () {
           chicken.dir = this.moveDir;
           return this.moveDir;
         }
+
+        if (time - lastPeckAlignCheck < 100) {
+          chicken.dir = this.moveDir;
+          return this.moveDir;
+        }
+        lastPeckAlignCheck = time;
 
         var peckDir = findPeckDirForLetter(this.peckTarget);
         if (peckDir !== null) {
@@ -418,11 +436,17 @@ var DinoChicken = (function () {
       }
     };
 
+    function invalidateLetterCache() {
+      letterCache.candidates = null;
+      letterCache.builtAt = 0;
+    }
+
     function isPeckableTextNode(node) {
       var el = node.parentElement;
-      while (el) {
-        if (dom.root.contains(el)) return false;
+      if (!el || dom.root.contains(el)) return false;
+      while (el && el !== document.body) {
         if (el.style && el.style.visibility === 'hidden') return false;
+        if (dom.root.contains(el)) return false;
         el = el.parentElement;
       }
       return true;
@@ -430,10 +454,9 @@ var DinoChicken = (function () {
 
     function getCharClientPoint(node, offset) {
       try {
-        var range = document.createRange();
-        range.setStart(node, offset);
-        range.setEnd(node, Math.min(offset + 1, node.length));
-        var rect = range.getBoundingClientRect();
+        reusedRange.setStart(node, offset);
+        reusedRange.setEnd(node, Math.min(offset + 1, node.length));
+        var rect = reusedRange.getBoundingClientRect();
         if (!rect.width && !rect.height) return null;
         return {
           x: rect.left + rect.width / 2,
@@ -446,8 +469,49 @@ var DinoChicken = (function () {
       }
     }
 
-    function collectLetterTargets() {
+    function pickOffsetsInText(text) {
+      var offsets = [];
+      var len = text.length;
+      var i;
+      var stride;
+
+      if (len <= 40) {
+        for (i = 0; i < len; i++) {
+          if (!/\s/.test(text.charAt(i))) offsets.push(i);
+        }
+        return offsets;
+      }
+
+      stride = Math.max(1, Math.floor(len / 6));
+      for (i = 0; i < len; i += stride) {
+        if (!/\s/.test(text.charAt(i))) offsets.push(i);
+        if (offsets.length >= 6) break;
+      }
+
+      if (!offsets.length) {
+        for (i = 0; i < len; i++) {
+          if (!/\s/.test(text.charAt(i))) {
+            offsets.push(i);
+            break;
+          }
+        }
+      }
+
+      return offsets;
+    }
+
+    function isRectNearViewport(rect) {
+      return (
+        rect.bottom >= -VIEWPORT_PAD &&
+        rect.top <= window.innerHeight + VIEWPORT_PAD &&
+        rect.right >= -VIEWPORT_PAD &&
+        rect.left <= window.innerWidth + VIEWPORT_PAD
+      );
+    }
+
+    function buildLetterCache() {
       var candidates = [];
+      var nodesScanned = 0;
       var walker = document.createTreeWalker(
         document.body,
         NodeFilter.SHOW_TEXT,
@@ -464,26 +528,86 @@ var DinoChicken = (function () {
         }
       );
 
-      while (walker.nextNode()) {
+      while (
+        walker.nextNode() &&
+        candidates.length < LETTER_SCAN_MAX_CANDIDATES &&
+        nodesScanned < LETTER_SCAN_MAX_NODES
+      ) {
+        nodesScanned += 1;
         var node = walker.currentNode;
+        var parent = node.parentElement;
+        if (!parent) continue;
+
+        var parentRect = parent.getBoundingClientRect();
+        if (!isRectNearViewport(parentRect)) continue;
+
         var text = node.textContent;
-        for (var i = 0; i < text.length; i++) {
-          if (/\s/.test(text.charAt(i))) continue;
-          var point = getCharClientPoint(node, i);
+        var offsets = pickOffsetsInText(text);
+        var j;
+        var point;
+
+        for (j = 0; j < offsets.length; j++) {
+          if (candidates.length >= LETTER_SCAN_MAX_CANDIDATES) break;
+          point = getCharClientPoint(node, offsets[j]);
           if (point) candidates.push(point);
         }
       }
 
+      letterCache.candidates = candidates;
+      letterCache.builtAt = performance.now();
       return candidates;
     }
 
-    function getChickenCenter() {
+    function getLetterCandidates() {
+      var now = performance.now();
+      if (letterCache.candidates && now - letterCache.builtAt < letterCache.TTL) {
+        return letterCache.candidates;
+      }
+      return buildLetterCache();
+    }
+
+    function getFrameSnapshot() {
+      if (frameSnapshot) return frameSnapshot;
+
       var rect = dom.sprite.getBoundingClientRect();
-      return {
-        x: rect.left + rect.width / 2,
-        y: rect.top + rect.height / 2,
-        peckReach: rect.width * 0.55
+      var spriteSize = rect.width;
+      var centerX = rect.left + spriteSize / 2;
+      var centerY = rect.top + spriteSize / 2;
+      var peckDistance = spriteSize / 2 - (16 / SPRITE_SIZE) * spriteSize;
+      var peckPoints = [];
+      var d;
+      var radians;
+      var x;
+      var y;
+      var off;
+
+      for (d = 0; d < 8; d++) {
+        radians = util.getRadians(d);
+        x = centerX + Math.cos(radians) * peckDistance;
+        y = centerY + Math.sin(radians) * peckDistance;
+        off = PECK_DIR_OFFSETS[d];
+        if (off) {
+          x += off.x * spriteSize;
+          y += off.y * spriteSize;
+        }
+        peckPoints[d] = { x: x, y: y };
+      }
+
+      frameSnapshot = {
+        rect: rect,
+        center: {
+          x: centerX,
+          y: centerY,
+          peckReach: spriteSize * 0.55
+        },
+        peckPoints: peckPoints
       };
+
+      return frameSnapshot;
+    }
+
+    function getChickenCenter() {
+      return getFrameSnapshot().center;
     }
 
     function addDistances(candidates, center) {
@@ -517,7 +641,7 @@ var DinoChicken = (function () {
     function pickAutonomousTarget(minDist) {
       var center = getChickenCenter();
       var walkMin = minDist || center.peckReach * 1.25;
-      var letterCandidates = addDistances(collectLetterTargets(), center);
+      var letterCandidates = addDistances(getLetterCandidates().slice(), center);
 
       if (letterCandidates.length) {
         var walkCandidates = [];
@@ -569,10 +693,9 @@ var DinoChicken = (function () {
 
     function getCharRect(node, offset) {
       try {
-        var range = document.createRange();
-        range.setStart(node, offset);
-        range.setEnd(node, Math.min(offset + 1, node.length));
-        return range.getBoundingClientRect();
+        reusedRange.setStart(node, offset);
+        reusedRange.setEnd(node, Math.min(offset + 1, node.length));
+        return reusedRange.getBoundingClientRect();
       } catch (err) {
         return null;
       }
@@ -595,34 +718,20 @@ var DinoChicken = (function () {
     }
 
     function getPeckPointForDir(dir) {
-      var rect = dom.sprite.getBoundingClientRect();
-      var spriteSize = rect.width;
-      var radians = util.getRadians(dir);
-      var centerX = rect.left + spriteSize / 2;
-      var centerY = rect.top + spriteSize / 2;
-      var peckDistance = spriteSize / 2 - (16 / SPRITE_SIZE) * spriteSize;
-      var x = centerX + Math.cos(radians) * peckDistance;
-      var y = centerY + Math.sin(radians) * peckDistance;
-      var offset = PECK_DIR_OFFSETS[dir];
-
-      if (offset) {
-        x += offset.x * spriteSize;
-        y += offset.y * spriteSize;
-      }
-
-      return { x: x, y: y };
+      return getFrameSnapshot().peckPoints[dir];
     }
 
     function findPeckDirForLetter(letter) {
       var bestDir = null;
       var bestDist = Infinity;
-      var threshold = getLetterAlignThreshold(letter);
+      var threshold = letter.alignThreshold || getLetterAlignThreshold(letter);
+      var peckPoints = getFrameSnapshot().peckPoints;
       var i;
       var point;
       var dist;
 
       for (i = 0; i < 8; i++) {
-        point = getPeckPointForDir(i);
+        point = peckPoints[i];
         dist = Math.sqrt(
           (point.x - letter.x) * (point.x - letter.x) +
           (point.y - letter.y) * (point.y - letter.y)
@@ -782,6 +891,7 @@ var DinoChicken = (function () {
 
       if (charSpan) {
         hiddenElements.push({ type: 'char', span: charSpan });
+        invalidateLetterCache();
       } else if (!chicken.autonomousPeck) {
         var missPoint = getPeckPoint();
         var el = findPeckTargetAt(missPoint.x, missPoint.y);
@@ -880,6 +990,7 @@ var DinoChicken = (function () {
     }
 
     function onResize() {
+      invalidateLetterCache();
       var bounded = util.isOutOfBounds(
         chicken.getDisplaySize(),
         chicken.x,
@@ -891,6 +1002,7 @@ var DinoChicken = (function () {
     }
 
     function gameLoop(time) {
+      frameSnapshot = null;
       chicken.update(time, gameEl.clientWidth, gameEl.clientHeight, getMovementDir(time));
       updatePeckDot();
       rafId = requestAnimationFrame(gameLoop);
